@@ -65,7 +65,17 @@ class ResmiGazeteScraper:
                 response = self.session.get(proxy_url, timeout=45)
                 response.raise_for_status()
 
+                # UTF-8 encoding zorla
+                response.encoding = 'utf-8'
                 content = response.text
+
+                # Encoding düzeltme - mojibake fix
+                try:
+                    # Eğer yanlış decode edilmişse düzelt
+                    if 'Ã' in content or 'Ä' in content:
+                        content = content.encode('latin-1').decode('utf-8')
+                except:
+                    pass
 
                 # İçeriğin gerçekten Resmi Gazete olduğunu kontrol et
                 if 'resmi' in content.lower() or 'gazete' in content.lower() or 'sayı' in content.lower():
