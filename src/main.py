@@ -72,8 +72,7 @@ def run_bot(to_email: str = None, dry_run: bool = False, verbose: bool = False) 
     gazette_filter = GazetteFilter(
         filter_universities=True,
         filter_announcements=True,
-        filter_central_bank=True,
-        filter_appointments=False
+        filter_central_bank=True
     )
     filter_result = gazette_filter.filter_items(gazette_data.items)
 
