@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 from datetime import datetime
 import re
+import time
+import random
 
 
 @dataclass
@@ -35,21 +37,79 @@ class ResmiGazeteScraper:
     BASE_URL = "https://www.resmigazete.gov.tr"
     DEFAULT_URL = f"{BASE_URL}/default.aspx"
 
+    # Alternatif URL'ler
+    ALT_URLS = [
+        f"{BASE_URL}/default.aspx",
+        f"{BASE_URL}/",
+        f"{BASE_URL}/eskiler/index.htm",
+    ]
+
     def __init__(self):
         self.session = requests.Session()
+        # Daha gerçekçi browser headers
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
         })
 
-    def fetch_page(self, url: Optional[str] = None) -> str:
-        """Sayfayı indir"""
+    def fetch_page(self, url: Optional[str] = None, max_retries: int = 3) -> str:
+        """Sayfayı indir - retry mantığı ile"""
         target_url = url or self.DEFAULT_URL
-        response = self.session.get(target_url, timeout=30)
-        response.raise_for_status()
-        response.encoding = 'utf-8'
-        return response.text
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                # Random delay ekle (bot algılamayı önlemek için)
+                if attempt > 0:
+                    delay = (2 ** attempt) + random.uniform(1, 3)
+                    print(f"      Retry {attempt + 1}/{max_retries}, {delay:.1f}s bekleniyor...")
+                    time.sleep(delay)
+
+                response = self.session.get(
+                    target_url,
+                    timeout=60,  # Timeout artırıldı
+                    allow_redirects=True
+                )
+                response.raise_for_status()
+                response.encoding = 'utf-8'
+                return response.text
+
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                print(f"      Timeout hatası (deneme {attempt + 1})")
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                print(f"      Bağlantı hatası (deneme {attempt + 1})")
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                print(f"      İstek hatası (deneme {attempt + 1}): {e}")
+
+        # Alternatif URL'leri dene
+        print("      Ana URL başarısız, alternatif URL'ler deneniyor...")
+        for alt_url in self.ALT_URLS:
+            if alt_url == target_url:
+                continue
+            try:
+                time.sleep(random.uniform(2, 4))
+                response = self.session.get(alt_url, timeout=60, allow_redirects=True)
+                response.raise_for_status()
+                response.encoding = 'utf-8'
+                print(f"      Alternatif URL başarılı: {alt_url}")
+                return response.text
+            except Exception as e:
+                print(f"      Alternatif URL başarısız: {alt_url}")
+                continue
+
+        raise last_error or Exception("Tüm bağlantı denemeleri başarısız")
 
     def parse_gazette(self, html: str) -> GazetteData:
         """HTML içeriğini parse et"""
