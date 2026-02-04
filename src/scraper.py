@@ -207,13 +207,6 @@ class ResmiGazeteScraper:
         for i, elem in enumerate(all_elements):
             elem_text = elem.get_text(strip=True)
 
-            # Kategori mi kontrol et
-            if elem.name in ['b', 'strong', 'u']:
-                detected = self._is_category_header(elem_text)
-                if detected:
-                    current_category = detected
-                    continue
-
             # Link ise ve PDF/HTM ise ekle
             if elem.name == 'a':
                 href = elem.get('href', '')
@@ -236,33 +229,17 @@ class ResmiGazeteScraper:
 
                     item_type = 'pdf' if '.pdf' in href_lower else 'htm'
 
-                    # Kategoriyi başlıktan çıkarmayı dene
-                    # Eğer başlık "— Yönetmelik..." şeklindeyse ve current_category Genel ise
-                    # Bir önceki bold/underline'a bak
-                    if current_category == "Genel":
-                        # Başlıktan kategori çıkarmayı dene
-                        title_upper = title.upper()
-                        if 'YÖNETMELİK' in title_upper or 'YÖNETMELIK' in title_upper:
-                            current_category = "YÖNETMELİKLER"
-                        elif 'TEBLİĞ' in title_upper or 'TEBLIG' in title_upper:
-                            current_category = "TEBLİĞLER"
-                        elif 'KARAR' in title_upper and ('HÂKİM' in title_upper or 'HAKÎM' in title_upper or 'SAVCI' in title_upper):
-                            current_category = "HÂKİMLER VE SAVCILAR KURULU KARARI"
-                        elif 'ÖZELLEŞTİRME' in title_upper:
-                            current_category = "TEBLİĞLER"
+                    # Her içerik için başlığa göre kategori belirle
+                    category = self._get_category_from_title(title)
 
                     # Duplicate kontrolü
                     if not any(item.link == href for item in items):
                         items.append(GazetteItem(
                             title=title,
-                            category=current_category,
+                            category=category,
                             link=href,
                             item_type=item_type
                         ))
-
-        # Eğer hala tüm items "Genel" kategorisindeyse, başlıklara göre kategorile
-        if items and all(item.category == "Genel" for item in items):
-            items = self._categorize_by_title(items)
 
         return GazetteData(
             date=date_str,
@@ -271,43 +248,32 @@ class ResmiGazeteScraper:
             url=self.BASE_URL
         )
 
-    def _categorize_by_title(self, items: List[GazetteItem]) -> List[GazetteItem]:
-        """Başlıklara göre kategorile"""
-        categorized = []
+    def _get_category_from_title(self, title: str) -> str:
+        """Başlığa göre kategori belirle"""
+        title_upper = self._normalize_text(title)
 
-        for item in items:
-            title_upper = self._normalize_text(item.title)
-            category = "Genel"
-
-            if 'YONETMELIK' in title_upper:
-                category = "YÖNETMELİKLER"
-            elif 'TEBLIG' in title_upper:
-                category = "TEBLİĞLER"
-            elif 'HAKIM' in title_upper or 'SAVCI' in title_upper:
-                category = "HÂKİMLER VE SAVCILAR KURULU KARARI"
-            elif 'OZELLESTIRME' in title_upper:
-                category = "TEBLİĞLER"
-            elif 'KANUN' in title_upper:
-                category = "YASAMA BÖLÜMÜ"
-            elif 'CUMHURBASKANI' in title_upper or 'CUMHURBASKANLIGI' in title_upper:
-                category = "CUMHURBAŞKANLIĞI KARARLARI"
-            elif 'GENELGE' in title_upper:
-                category = "GENELGELER"
-            elif 'ILAN' in title_upper or 'IHALE' in title_upper:
-                category = "İLÂN BÖLÜMÜ"
-            elif 'YARGI' in title_upper:
-                category = "İLÂN BÖLÜMÜ"
-            elif 'MERKEZ BANKASI' in title_upper or 'DOVIZ' in title_upper:
-                category = "TEBLİĞLER"
-
-            categorized.append(GazetteItem(
-                title=item.title,
-                category=category,
-                link=item.link,
-                item_type=item.item_type
-            ))
-
-        return categorized
+        if 'HAKIM' in title_upper or 'SAVCI' in title_upper:
+            return "HÂKİMLER VE SAVCILAR KURULU KARARI"
+        elif 'YONETMELIK' in title_upper:
+            return "YÖNETMELİKLER"
+        elif 'OZELLESTIRME' in title_upper:
+            return "TEBLİĞLER"
+        elif 'TEBLIG' in title_upper:
+            return "TEBLİĞLER"
+        elif 'KANUN' in title_upper:
+            return "YASAMA BÖLÜMÜ"
+        elif 'CUMHURBASKANI' in title_upper or 'CUMHURBASKANLIGI' in title_upper:
+            return "CUMHURBAŞKANLIĞI KARARLARI"
+        elif 'GENELGE' in title_upper:
+            return "GENELGELER"
+        elif 'ILAN' in title_upper or 'IHALE' in title_upper:
+            return "İLÂN BÖLÜMÜ"
+        elif 'YARGI' in title_upper:
+            return "İLÂN BÖLÜMÜ"
+        elif 'MERKEZ BANKASI' in title_upper or 'DOVIZ' in title_upper:
+            return "TEBLİĞLER"
+        else:
+            return "Diğer"
 
     def scrape(self) -> GazetteData:
         """Ana scraping fonksiyonu"""
