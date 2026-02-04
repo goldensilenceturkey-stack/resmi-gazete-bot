@@ -28,33 +28,33 @@ class GazetteFilter:
 
     # Merkez Bankası döviz/kur haberleri
     CENTRAL_BANK_PATTERN = re.compile(
-        r'merkez bankası.{0,30}(döviz|kur|efektif|parite)',
+        r'merkez bankası|döviz kur|devlet iç borçlanma',
         re.IGNORECASE
     )
 
-    # Filtrelenecek kategoriler
-    FILTERED_CATEGORIES = [
-        'YARGI İLÂNLARI',
-        'YARGIILANLARI',
-        'YARGI ILANLARI',
-        'ARTIRMA, EKSİLTME',
-        'ARTIRMA EKSİLTME',
-        'ARTIRMA,EKSİLTME',
-        'ÇEŞİTLİ İLÂNLAR',
-        'ÇEŞİTLİ ILANLAR',
-        'CESITLI ILANLAR',
+    # Filtrelenecek kategoriler (tam veya kısmi eşleşme)
+    FILTERED_CATEGORY_PATTERNS = [
+        r'YARGI\s*İL[AÂ]N',
+        r'ARTIRMA.*EKSİLTME',
+        r'ÇEŞİTLİ\s*İL[AÂ]N',
+        r'İL[AÂ]N\s*BÖLÜMÜ',
     ]
 
-    # Atama/kadro ilanları pattern
-    APPOINTMENT_PATTERN = re.compile(
-        r'atama|kadro|münhal|personel alımı|sözleşmeli personel',
-        re.IGNORECASE
-    )
+    # Filtrelenecek başlık pattern'leri
+    FILTERED_TITLE_PATTERNS = [
+        r'^a\s*-\s*Yargı',
+        r'^b\s*-\s*Artırma',
+        r'^c\s*-\s*Çeşitli',
+        r'Yargı\s*İl[aâ]nları',
+        r'Artırma.*Eksiltme.*İl[aâ]n',
+        r'Çeşitli\s*İl[aâ]nlar',
+        r'Merkez\s*Bankası.*Döviz',
+        r'Devlet\s*İç\s*Borçlanma',
+    ]
 
     def __init__(self, filter_universities: bool = True,
                  filter_announcements: bool = True,
-                 filter_central_bank: bool = True,
-                 filter_appointments: bool = False):
+                 filter_central_bank: bool = True):
         """
         Filtre yapılandırması
 
@@ -62,12 +62,14 @@ class GazetteFilter:
             filter_universities: Üniversite içeriklerini filtrele
             filter_announcements: İlan bölümlerini filtrele
             filter_central_bank: Merkez Bankası döviz haberlerini filtrele
-            filter_appointments: Atama/kadro ilanlarını filtrele
         """
         self.filter_universities = filter_universities
         self.filter_announcements = filter_announcements
         self.filter_central_bank = filter_central_bank
-        self.filter_appointments = filter_appointments
+
+        # Compiled patterns
+        self.category_patterns = [re.compile(p, re.IGNORECASE) for p in self.FILTERED_CATEGORY_PATTERNS]
+        self.title_patterns = [re.compile(p, re.IGNORECASE) for p in self.FILTERED_TITLE_PATTERNS]
 
     def should_filter(self, item: GazetteItem) -> Tuple[bool, str]:
         """
@@ -76,44 +78,32 @@ class GazetteFilter:
         Returns:
             (should_filter, reason) tuple
         """
-        # Kategori bazlı filtreleme
+        title = item.title
+        category = item.category
+
+        # 1. İlan bölümü filtrelemesi (kategori bazlı)
         if self.filter_announcements:
-            category_upper = item.category.upper()
-            # Türkçe karakterleri normalize et
-            category_normalized = self._normalize_turkish(category_upper)
+            for pattern in self.category_patterns:
+                if pattern.search(category):
+                    return True, "İlan bölümü"
 
-            for filtered_cat in self.FILTERED_CATEGORIES:
-                filtered_normalized = self._normalize_turkish(filtered_cat.upper())
-                if filtered_normalized in category_normalized or category_normalized in filtered_normalized:
-                    return True, f"İlan kategorisi: {item.category}"
+        # 2. İlan bölümü filtrelemesi (başlık bazlı)
+        if self.filter_announcements:
+            for pattern in self.title_patterns:
+                if pattern.search(title):
+                    return True, "İlan içeriği"
 
-        # Üniversite içerikleri
+        # 3. Üniversite içerikleri
         if self.filter_universities:
-            if self.UNIVERSITY_PATTERN.search(item.title):
-                return True, "Üniversite/Akademik içerik"
+            if self.UNIVERSITY_PATTERN.search(title):
+                return True, "Üniversite/Akademik"
 
-        # Merkez Bankası döviz haberleri
+        # 4. Merkez Bankası döviz haberleri
         if self.filter_central_bank:
-            if self.CENTRAL_BANK_PATTERN.search(item.title):
-                return True, "Merkez Bankası döviz/kur"
-
-        # Atama/kadro ilanları
-        if self.filter_appointments:
-            if self.APPOINTMENT_PATTERN.search(item.title):
-                return True, "Atama/Kadro ilanı"
+            if self.CENTRAL_BANK_PATTERN.search(title):
+                return True, "Merkez Bankası/Döviz"
 
         return False, ""
-
-    def _normalize_turkish(self, text: str) -> str:
-        """Türkçe karakterleri normalize et"""
-        replacements = {
-            'İ': 'I', 'Ğ': 'G', 'Ü': 'U', 'Ş': 'S', 'Ö': 'O', 'Ç': 'C',
-            'ı': 'i', 'ğ': 'g', 'ü': 'u', 'ş': 's', 'ö': 'o', 'ç': 'c',
-            'Â': 'A', 'â': 'a', 'Î': 'I', 'î': 'i', 'Û': 'U', 'û': 'u',
-        }
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-        return text
 
     def filter_items(self, items: List[GazetteItem]) -> FilterResult:
         """
@@ -134,7 +124,6 @@ class GazetteFilter:
 
             if should_filter:
                 filtered.append(item)
-                # Filtreleme nedenlerini say
                 if reason not in filter_reasons:
                     filter_reasons[reason] = 0
                 filter_reasons[reason] += 1
@@ -167,28 +156,29 @@ def main():
     """Test fonksiyonu"""
     # Test verileri
     test_items = [
-        GazetteItem("Hâkimler ve Savcılar Kurulu Kararı", "YÜRÜTME VE İDARE BÖLÜMÜ", "http://test.com/1.pdf"),
+        GazetteItem("Hâkimler ve Savcılar Kuruluna Ait Karar", "HÂKİMLER VE SAVCILAR KURULU KARARI", "http://test.com/1.pdf"),
         GazetteItem("İstanbul Üniversitesi Yönetmeliği", "YÖNETMELİKLER", "http://test.com/2.pdf"),
-        GazetteItem("Ankara Üniversitesi Fakülte Yönetmeliği", "YÖNETMELİKLER", "http://test.com/3.pdf"),
-        GazetteItem("Merkez Bankası Döviz Kurları", "TEBLİĞLER", "http://test.com/4.pdf"),
-        GazetteItem("Vergi Kanunu Değişikliği", "YASAMA BÖLÜMÜ", "http://test.com/5.pdf"),
-        GazetteItem("ABC İflas İlanı", "YARGI İLÂNLARI", "http://test.com/6.pdf"),
-        GazetteItem("XYZ Şirketi İhalesi", "ARTIRMA, EKSİLTME", "http://test.com/7.pdf"),
-        GazetteItem("Özelleştirme Kararı", "YÜRÜTME VE İDARE BÖLÜMÜ", "http://test.com/8.pdf"),
+        GazetteItem("Dip Tarama Malzemesi Yönetmeliği", "YÖNETMELİKLER", "http://test.com/3.htm"),
+        GazetteItem("T.C. Merkez Bankasınca Belirlenen Döviz Kurları", "TEBLİĞLER", "http://test.com/4.htm"),
+        GazetteItem("Özelleştirme İdaresi Kararı", "TEBLİĞLER", "http://test.com/5.pdf"),
+        GazetteItem("a - Yargı İlânları", "İLÂN BÖLÜMÜ", "http://test.com/6.htm"),
+        GazetteItem("b - Artırma, Eksiltme ve İhale İlânları", "İLÂN BÖLÜMÜ", "http://test.com/7.htm"),
+        GazetteItem("c - Çeşitli İlânlar", "İLÂN BÖLÜMÜ", "http://test.com/8.htm"),
+        GazetteItem("Vergi Kanunu Değişikliği", "YASAMA BÖLÜMÜ", "http://test.com/9.htm"),
     ]
 
     filter_obj = GazetteFilter()
     result = filter_obj.filter_items(test_items)
 
-    print("=== FİLTRELEME SONUÇLARI ===\n")
+    print("=== FİLTRELEME TEST SONUÇLARI ===\n")
 
-    print(f"Korunan içerikler ({len(result.kept_items)}):")
+    print(f"✓ Korunan içerikler ({len(result.kept_items)}):")
     for item in result.kept_items:
-        print(f"  ✓ {item.title}")
+        print(f"   [{item.category}] {item.title}")
 
-    print(f"\nFiltrelenen içerikler ({len(result.filtered_items)}):")
+    print(f"\n✗ Filtrelenen içerikler ({len(result.filtered_items)}):")
     for item in result.filtered_items:
-        print(f"  ✗ {item.title}")
+        print(f"   [{item.category}] {item.title}")
 
     print(f"\n{filter_obj.get_filter_stats(result)}")
 
