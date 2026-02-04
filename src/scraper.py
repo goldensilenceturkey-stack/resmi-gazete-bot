@@ -1,6 +1,6 @@
 """
 Resmi Gazete Web Scraper
-Türkiye Resmi Gazete'den günlük içerikleri RSS feed üzerinden çeker.
+Türkiye Resmi Gazete'den günlük içerikleri proxy üzerinden çeker.
 """
 
 import requests
@@ -12,6 +12,7 @@ import re
 import time
 import random
 import xml.etree.ElementTree as ET
+from urllib.parse import quote
 
 
 @dataclass
@@ -20,7 +21,7 @@ class GazetteItem:
     title: str
     category: str
     link: str
-    item_type: str = "htm"  # htm veya pdf
+    item_type: str = "htm"
 
 
 @dataclass
@@ -33,151 +34,69 @@ class GazetteData:
 
 
 class ResmiGazeteScraper:
-    """Resmi Gazete web scraper sınıfı - RSS tabanlı"""
+    """Resmi Gazete web scraper - proxy destekli"""
 
     BASE_URL = "https://www.resmigazete.gov.tr"
+    TARGET_URL = f"{BASE_URL}/default.aspx"
 
-    # RSS Feed URL'leri
-    RSS_URLS = [
-        f"{BASE_URL}/rss/fihrist.xml",
-        f"{BASE_URL}/rss/eskifihrist.xml",
-    ]
-
-    # Web scraping için yedek URL'ler
-    WEB_URLS = [
-        f"{BASE_URL}/default.aspx",
-        f"{BASE_URL}/",
+    # Ücretsiz proxy servisleri
+    PROXY_SERVICES = [
+        lambda url: f"https://api.allorigins.win/raw?url={quote(url, safe='')}",
+        lambda url: f"https://api.codetabs.com/v1/proxy?quest={quote(url, safe='')}",
+        lambda url: f"https://corsproxy.io/?{quote(url, safe='')}",
     ]
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
         })
 
-    def fetch_rss(self, max_retries: int = 3) -> Optional[str]:
-        """RSS feed'i indir"""
-        for rss_url in self.RSS_URLS:
-            for attempt in range(max_retries):
-                try:
-                    if attempt > 0:
-                        delay = (2 ** attempt) + random.uniform(1, 2)
-                        print(f"      Retry {attempt + 1}/{max_retries}, {delay:.1f}s bekleniyor...")
-                        time.sleep(delay)
+    def fetch_via_proxy(self, target_url: str) -> Optional[str]:
+        """Proxy servisleri üzerinden içerik çek"""
 
-                    response = self.session.get(rss_url, timeout=30)
-                    response.raise_for_status()
-                    response.encoding = 'utf-8'
-                    print(f"      RSS başarılı: {rss_url}")
-                    return response.text
+        for i, proxy_fn in enumerate(self.PROXY_SERVICES):
+            proxy_url = proxy_fn(target_url)
+            print(f"      Proxy {i + 1}/{len(self.PROXY_SERVICES)} deneniyor...")
 
-                except Exception as e:
-                    print(f"      RSS hatası ({rss_url}): {type(e).__name__}")
-                    continue
+            try:
+                response = self.session.get(proxy_url, timeout=45)
+                response.raise_for_status()
 
-        return None
+                content = response.text
 
-    def fetch_web(self, max_retries: int = 2) -> Optional[str]:
-        """Web sayfasını indir (yedek yöntem)"""
-        for web_url in self.WEB_URLS:
-            for attempt in range(max_retries):
-                try:
-                    if attempt > 0:
-                        time.sleep(3)
+                # İçeriğin gerçekten Resmi Gazete olduğunu kontrol et
+                if 'resmi' in content.lower() or 'gazete' in content.lower() or 'sayı' in content.lower():
+                    print(f"      Proxy {i + 1} başarılı!")
+                    return content
+                else:
+                    print(f"      Proxy {i + 1}: Geçersiz içerik")
 
-                    response = self.session.get(web_url, timeout=45)
-                    response.raise_for_status()
-                    response.encoding = 'utf-8'
-                    print(f"      Web başarılı: {web_url}")
-                    return response.text
+            except requests.exceptions.Timeout:
+                print(f"      Proxy {i + 1}: Timeout")
+            except requests.exceptions.RequestException as e:
+                print(f"      Proxy {i + 1}: {type(e).__name__}")
 
-                except Exception as e:
-                    print(f"      Web hatası ({web_url}): {type(e).__name__}")
-                    continue
+            time.sleep(random.uniform(1, 2))
 
         return None
 
-    def parse_rss(self, xml_content: str) -> GazetteData:
-        """RSS XML içeriğini parse et"""
-        items = []
-        date_str = datetime.now().strftime('%d %B %Y')
-        issue_number = "Bilinmiyor"
-
+    def fetch_direct(self, target_url: str) -> Optional[str]:
+        """Direkt bağlantı dene (lokal test için)"""
         try:
-            root = ET.fromstring(xml_content)
+            response = self.session.get(target_url, timeout=30)
+            response.raise_for_status()
+            response.encoding = 'utf-8'
+            print("      Direkt bağlantı başarılı!")
+            return response.text
+        except Exception as e:
+            print(f"      Direkt bağlantı başarısız: {type(e).__name__}")
+            return None
 
-            # Channel bilgilerini al
-            channel = root.find('channel')
-            if channel is not None:
-                title_elem = channel.find('title')
-                if title_elem is not None and title_elem.text:
-                    # "Resmi Gazete - 04 Şubat 2026 - Sayı: 33158" formatı
-                    title_text = title_elem.text
-
-                    # Tarih çıkar
-                    date_match = re.search(
-                        r'(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})',
-                        title_text, re.IGNORECASE
-                    )
-                    if date_match:
-                        date_str = date_match.group(0)
-
-                    # Sayı çıkar
-                    issue_match = re.search(r'Sayı\s*:\s*(\d+)', title_text)
-                    if issue_match:
-                        issue_number = issue_match.group(1)
-
-            # Item'ları parse et
-            current_category = "Genel"
-
-            for item in root.findall('.//item'):
-                title_elem = item.find('title')
-                link_elem = item.find('link')
-                category_elem = item.find('category')
-
-                if title_elem is None or not title_elem.text:
-                    continue
-
-                title = title_elem.text.strip()
-                link = link_elem.text.strip() if link_elem is not None and link_elem.text else ""
-
-                # Kategori
-                if category_elem is not None and category_elem.text:
-                    current_category = category_elem.text.strip()
-
-                # Link yoksa veya çok kısa başlıksa atla
-                if not link or len(title) < 5:
-                    continue
-
-                # Tam URL oluştur
-                if not link.startswith('http'):
-                    link = f"{self.BASE_URL}/{link.lstrip('/')}"
-
-                item_type = 'pdf' if '.pdf' in link.lower() else 'htm'
-
-                items.append(GazetteItem(
-                    title=title,
-                    category=current_category,
-                    link=link,
-                    item_type=item_type
-                ))
-
-        except ET.ParseError as e:
-            print(f"      RSS parse hatası: {e}")
-
-        return GazetteData(
-            date=date_str,
-            issue_number=issue_number,
-            items=items,
-            url=self.BASE_URL
-        )
-
-    def parse_web(self, html: str) -> GazetteData:
-        """HTML içeriğini parse et (yedek yöntem)"""
+    def parse_html(self, html: str) -> GazetteData:
+        """HTML içeriğini parse et"""
         soup = BeautifulSoup(html, 'html.parser')
         items = []
 
@@ -186,6 +105,7 @@ class ResmiGazeteScraper:
         date_str = datetime.now().strftime('%d %B %Y')
         issue_number = "Bilinmiyor"
 
+        # Türkçe tarih pattern
         date_match = re.search(
             r'(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})',
             text, re.IGNORECASE
@@ -193,45 +113,60 @@ class ResmiGazeteScraper:
         if date_match:
             date_str = date_match.group(0)
 
+        # Sayı pattern
         issue_match = re.search(r'Sayı\s*:\s*(\d+)', text)
         if issue_match:
             issue_number = issue_match.group(1)
 
-        # Linkleri çek
+        # Kategorileri ve linkleri çek
         current_category = "Genel"
         category_keywords = [
             'YÜRÜTME VE İDARE BÖLÜMÜ', 'YASAMA BÖLÜMÜ', 'YARGI BÖLÜMÜ',
-            'İLÂN BÖLÜMÜ', 'YÖNETMELİKLER', 'TEBLİĞLER', 'CUMHURBAŞKANLIĞI'
+            'İLÂN BÖLÜMÜ', 'MİLLETLERARASI', 'YÖNETMELİKLER', 'TEBLİĞLER',
+            'CUMHURBAŞKANLIĞI', 'BAKANLIKLAR', 'GENELGE', 'KANUN',
+            'CUMHURBAŞKANLIĞI KARARLARI', 'ATAMA KARARLARI'
         ]
 
-        for element in soup.find_all(['a', 'b', 'strong', 'h2', 'h3']):
-            if element.name in ['b', 'strong', 'h2', 'h3']:
-                elem_text = element.get_text(strip=True).upper()
-                for kw in category_keywords:
-                    if kw in elem_text:
-                        current_category = element.get_text(strip=True)
-                        break
-                continue
+        # Tüm elementleri tara
+        for element in soup.find_all(['a', 'b', 'strong', 'h1', 'h2', 'h3', 'td', 'span']):
+            elem_text = element.get_text(strip=True)
 
+            # Kategori başlığı kontrolü
+            if element.name in ['b', 'strong', 'h1', 'h2', 'h3', 'td', 'span']:
+                elem_upper = elem_text.upper()
+                for kw in category_keywords:
+                    if kw in elem_upper and len(elem_text) < 100:
+                        current_category = elem_text
+                        break
+
+            # Link kontrolü
             if element.name == 'a':
                 href = element.get('href', '')
-                title = element.get_text(strip=True)
+                title = elem_text
 
                 if not title or len(title) < 5:
                     continue
 
-                if '.pdf' in href.lower() or '.htm' in href.lower():
+                # PDF veya HTM linkleri
+                href_lower = href.lower()
+                if '.pdf' in href_lower or '.htm' in href_lower:
+                    # Tam URL oluştur
                     if not href.startswith('http'):
-                        href = f"{self.BASE_URL}/{href.lstrip('/')}"
+                        if href.startswith('/'):
+                            href = f"{self.BASE_URL}{href}"
+                        else:
+                            href = f"{self.BASE_URL}/{href}"
 
-                    item_type = 'pdf' if '.pdf' in href.lower() else 'htm'
+                    item_type = 'pdf' if '.pdf' in href_lower else 'htm'
 
-                    items.append(GazetteItem(
-                        title=title,
-                        category=current_category,
-                        link=href,
-                        item_type=item_type
-                    ))
+                    # Duplicate kontrolü
+                    if not any(item.link == href for item in items):
+                        items.append(GazetteItem(
+                            title=title,
+                            category=current_category,
+                            link=href,
+                            item_type=item_type
+                        ))
 
         return GazetteData(
             date=date_str,
@@ -241,25 +176,21 @@ class ResmiGazeteScraper:
         )
 
     def scrape(self) -> GazetteData:
-        """Ana scraping fonksiyonu - önce RSS, sonra web"""
+        """Ana scraping fonksiyonu"""
 
-        # Önce RSS dene
-        print("      RSS feed deneniyor...")
-        rss_content = self.fetch_rss()
-        if rss_content:
-            data = self.parse_rss(rss_content)
-            if data.items:
-                return data
-            print("      RSS'den içerik alınamadı, web deneniyor...")
+        # Önce direkt bağlantı dene (lokal çalışma için)
+        print("      Direkt bağlantı deneniyor...")
+        content = self.fetch_direct(self.TARGET_URL)
 
-        # RSS başarısızsa web dene
-        print("      Web scraping deneniyor...")
-        web_content = self.fetch_web()
-        if web_content:
-            return self.parse_web(web_content)
+        # Direkt başarısızsa proxy dene
+        if not content:
+            print("      Proxy servisleri deneniyor...")
+            content = self.fetch_via_proxy(self.TARGET_URL)
 
-        # Her ikisi de başarısızsa boş döndür
-        raise Exception("Ne RSS ne de web erişimi başarılı olmadı")
+        if not content:
+            raise Exception("Hiçbir yöntemle içerik alınamadı")
+
+        return self.parse_html(content)
 
 
 def main():
@@ -283,8 +214,10 @@ def main():
             for cat, cat_items in categories.items():
                 print(f"\n{cat} ({len(cat_items)} öğe)")
                 for item in cat_items[:3]:
-                    title_short = item.title[:60] + "..." if len(item.title) > 60 else item.title
+                    title_short = item.title[:55] + "..." if len(item.title) > 55 else item.title
                     print(f"  - {title_short} [{item.item_type.upper()}]")
+        else:
+            print("\nUYARI: Hiç içerik bulunamadı!")
 
     except Exception as e:
         print(f"Hata: {e}")
