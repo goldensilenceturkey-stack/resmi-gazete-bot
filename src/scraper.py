@@ -49,7 +49,29 @@ class ResmiGazeteScraper:
     SKIP_TITLES = [
         'pdf görüntüle', 'htm görüntüle', 'görüntüle', 'yazdır',
         'ana sayfa', 'iletişim', 'arama', 'arşiv', 'önceki sayı',
-        'tüm kategoriler', 'zaman aralığı', 'son mükerrer'
+        'tüm kategoriler', 'zaman aralığı', 'son mükerrer', 'fihrist'
+    ]
+
+    # Kategori başlıkları (büyük-küçük harf duyarsız)
+    CATEGORY_HEADERS = [
+        'YÜRÜTME VE İDARE BÖLÜMÜ',
+        'YASAMA BÖLÜMÜ',
+        'YARGI BÖLÜMÜ',
+        'İLÂN BÖLÜMÜ',
+        'İLAN BÖLÜMÜ',
+        'MİLLETLERARASI ANDLAŞMALAR',
+        'HÂKİMLER VE SAVCILAR KURULU KARARI',
+        'HÂKİMLER VE SAVCILAR KURULU',
+        'HAKIMLER VE SAVCILAR KURULU',
+        'CUMHURBAŞKANLIĞI KARARLARI',
+        'CUMHURBAŞKANLIĞI',
+        'BAKANLAR KURULU KARARLARI',
+        'YÖNETMELİKLER',
+        'TEBLİĞLER',
+        'GENELGELER',
+        'KANUNLAR',
+        'KANUN HÜKMÜNDE KARARNAME',
+        'ATAMA KARARLARI',
     ]
 
     def __init__(self):
@@ -71,18 +93,16 @@ class ResmiGazeteScraper:
                 response = self.session.get(proxy_url, timeout=45)
                 response.raise_for_status()
 
-                # UTF-8 encoding zorla
                 response.encoding = 'utf-8'
                 content = response.text
 
-                # Encoding düzeltme - mojibake fix
+                # Encoding düzeltme
                 try:
                     if 'Ã' in content or 'Ä' in content:
                         content = content.encode('latin-1').decode('utf-8')
                 except:
                     pass
 
-                # İçeriğin gerçekten Resmi Gazete olduğunu kontrol et
                 if 'resmi' in content.lower() or 'gazete' in content.lower():
                     print(f"      Proxy {i + 1} başarılı!")
                     return content
@@ -99,7 +119,7 @@ class ResmiGazeteScraper:
         return None
 
     def fetch_direct(self, target_url: str) -> Optional[str]:
-        """Direkt bağlantı dene (lokal test için)"""
+        """Direkt bağlantı dene"""
         try:
             response = self.session.get(target_url, timeout=30)
             response.raise_for_status()
@@ -114,61 +134,41 @@ class ResmiGazeteScraper:
         """Bu başlık atlanmalı mı?"""
         title_lower = title.lower().strip()
 
-        # Çok kısa başlıklar
         if len(title_lower) < 5:
             return True
 
-        # UI elementleri
         for skip in self.SKIP_TITLES:
             if skip in title_lower:
                 return True
 
-        # Sadece harf/rakam olmayan başlıklar
         if not any(c.isalpha() for c in title):
             return True
 
         return False
 
-    def _detect_category(self, text: str) -> Optional[str]:
-        """Metin bir kategori başlığı mı?"""
+    def _normalize_text(self, text: str) -> str:
+        """Türkçe karakterleri normalize et"""
+        replacements = {
+            'İ': 'I', 'Ğ': 'G', 'Ü': 'U', 'Ş': 'S', 'Ö': 'O', 'Ç': 'C',
+            'ı': 'I', 'ğ': 'G', 'ü': 'U', 'ş': 'S', 'ö': 'O', 'ç': 'C',
+            'Â': 'A', 'â': 'A', 'Î': 'I', 'î': 'I', 'Û': 'U', 'û': 'U',
+        }
+        result = text.upper()
+        for old, new in replacements.items():
+            result = result.replace(old, new)
+        return result
+
+    def _is_category_header(self, text: str) -> Optional[str]:
+        """Metin bir kategori başlığı mı? Eşleşen kategoriyi döndür."""
         text = text.strip()
-        text_upper = text.upper()
+        if len(text) < 5 or len(text) > 100:
+            return None
 
-        # Ana kategori başlıkları
-        main_categories = [
-            'YÜRÜTME VE İDARE BÖLÜMÜ',
-            'YASAMA BÖLÜMÜ',
-            'YARGI BÖLÜMÜ',
-            'İLÂN BÖLÜMÜ',
-            'İLAN BÖLÜMÜ',
-            'MİLLETLERARASI ANDLAŞMALAR',
-        ]
+        text_normalized = self._normalize_text(text)
 
-        # Alt kategori başlıkları
-        sub_categories = [
-            'HÂKİMLER VE SAVCILAR KURULU KARARI',
-            'HAKIMLER VE SAVCILAR KURULU',
-            'CUMHURBAŞKANLIĞI KARARLARI',
-            'CUMHURBAŞKANLIĞI',
-            'BAKANLAR KURULU KARARLARI',
-            'YÖNETMELİKLER',
-            'YÖNETMELIKLER',
-            'TEBLİĞLER',
-            'TEBLIĞLER',
-            'GENELGELER',
-            'KANUNLAR',
-            'KANUN HÜKMÜNDE KARARNAMELER',
-            'ATAMA KARARLARI',
-            'YARGI İLÂNLARI',
-            'YARGI İLANLARI',
-            'ARTIRMA, EKSİLTME',
-            'ARTIRMA EKSİLTME',
-            'ÇEŞİTLİ İLÂNLAR',
-            'ÇEŞİTLİ İLANLAR',
-        ]
-
-        for cat in main_categories + sub_categories:
-            if cat in text_upper:
+        for cat in self.CATEGORY_HEADERS:
+            cat_normalized = self._normalize_text(cat)
+            if cat_normalized in text_normalized:
                 return text
 
         return None
@@ -183,7 +183,6 @@ class ResmiGazeteScraper:
         date_str = datetime.now().strftime('%d %B %Y')
         issue_number = "Bilinmiyor"
 
-        # Türkçe tarih pattern
         date_match = re.search(
             r'(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)\s+(\d{4})',
             text, re.IGNORECASE
@@ -191,55 +190,41 @@ class ResmiGazeteScraper:
         if date_match:
             date_str = date_match.group(0)
 
-        # Sayı pattern
         issue_match = re.search(r'Sayı\s*:\s*(\d+)', text)
         if issue_match:
             issue_number = issue_match.group(1)
 
-        # Sayfadaki tüm metinleri ve linkleri sırayla işle
+        # HTML'deki tüm text içeriğini satır satır işle
+        # ve kategorileri linklerden önce yakala
         current_category = "Genel"
 
-        # Body içindeki tüm elementleri sırayla tara
-        body = soup.find('body')
-        if not body:
-            body = soup
+        # Önce tüm bold/underline elementleri bul ve kategorileri belirle
+        all_elements = soup.find_all(['b', 'strong', 'u', 'a'])
 
-        for element in body.find_all(['a', 'b', 'strong', 'u', 'h1', 'h2', 'h3', 'h4', 'span', 'td', 'div']):
-            elem_text = element.get_text(strip=True)
+        # Her element için index tut
+        element_categories = {}
 
-            if not elem_text:
-                continue
+        for i, elem in enumerate(all_elements):
+            elem_text = elem.get_text(strip=True)
 
-            # Kategori kontrolü
-            if element.name in ['b', 'strong', 'u', 'h1', 'h2', 'h3', 'h4']:
-                detected_cat = self._detect_category(elem_text)
-                if detected_cat:
-                    current_category = detected_cat
+            # Kategori mi kontrol et
+            if elem.name in ['b', 'strong', 'u']:
+                detected = self._is_category_header(elem_text)
+                if detected:
+                    current_category = detected
                     continue
 
-            # Span ve div içindeki bold metinler de kategori olabilir
-            if element.name in ['span', 'td', 'div']:
-                bold = element.find(['b', 'strong', 'u'])
-                if bold:
-                    bold_text = bold.get_text(strip=True)
-                    detected_cat = self._detect_category(bold_text)
-                    if detected_cat:
-                        current_category = detected_cat
-
-            # Link kontrolü
-            if element.name == 'a':
-                href = element.get('href', '')
+            # Link ise ve PDF/HTM ise ekle
+            if elem.name == 'a':
+                href = elem.get('href', '')
                 title = elem_text
 
-                # Atlanacak başlıklar
                 if self._should_skip_title(title):
                     continue
 
-                # PDF veya HTM linkleri
                 href_lower = href.lower()
                 if '.pdf' in href_lower or '.htm' in href_lower:
-                    # Navigasyon linkleri atla
-                    if 'default.aspx' in href_lower and '.htm' not in href_lower.replace('default.aspx', ''):
+                    if 'default.aspx' in href_lower:
                         continue
 
                     # Tam URL oluştur
@@ -251,6 +236,21 @@ class ResmiGazeteScraper:
 
                     item_type = 'pdf' if '.pdf' in href_lower else 'htm'
 
+                    # Kategoriyi başlıktan çıkarmayı dene
+                    # Eğer başlık "— Yönetmelik..." şeklindeyse ve current_category Genel ise
+                    # Bir önceki bold/underline'a bak
+                    if current_category == "Genel":
+                        # Başlıktan kategori çıkarmayı dene
+                        title_upper = title.upper()
+                        if 'YÖNETMELİK' in title_upper or 'YÖNETMELIK' in title_upper:
+                            current_category = "YÖNETMELİKLER"
+                        elif 'TEBLİĞ' in title_upper or 'TEBLIG' in title_upper:
+                            current_category = "TEBLİĞLER"
+                        elif 'KARAR' in title_upper and ('HÂKİM' in title_upper or 'HAKÎM' in title_upper or 'SAVCI' in title_upper):
+                            current_category = "HÂKİMLER VE SAVCILAR KURULU KARARI"
+                        elif 'ÖZELLEŞTİRME' in title_upper:
+                            current_category = "TEBLİĞLER"
+
                     # Duplicate kontrolü
                     if not any(item.link == href for item in items):
                         items.append(GazetteItem(
@@ -260,6 +260,10 @@ class ResmiGazeteScraper:
                             item_type=item_type
                         ))
 
+        # Eğer hala tüm items "Genel" kategorisindeyse, başlıklara göre kategorile
+        if items and all(item.category == "Genel" for item in items):
+            items = self._categorize_by_title(items)
+
         return GazetteData(
             date=date_str,
             issue_number=issue_number,
@@ -267,14 +271,50 @@ class ResmiGazeteScraper:
             url=self.BASE_URL
         )
 
+    def _categorize_by_title(self, items: List[GazetteItem]) -> List[GazetteItem]:
+        """Başlıklara göre kategorile"""
+        categorized = []
+
+        for item in items:
+            title_upper = self._normalize_text(item.title)
+            category = "Genel"
+
+            if 'YONETMELIK' in title_upper:
+                category = "YÖNETMELİKLER"
+            elif 'TEBLIG' in title_upper:
+                category = "TEBLİĞLER"
+            elif 'HAKIM' in title_upper or 'SAVCI' in title_upper:
+                category = "HÂKİMLER VE SAVCILAR KURULU KARARI"
+            elif 'OZELLESTIRME' in title_upper:
+                category = "TEBLİĞLER"
+            elif 'KANUN' in title_upper:
+                category = "YASAMA BÖLÜMÜ"
+            elif 'CUMHURBASKANI' in title_upper or 'CUMHURBASKANLIGI' in title_upper:
+                category = "CUMHURBAŞKANLIĞI KARARLARI"
+            elif 'GENELGE' in title_upper:
+                category = "GENELGELER"
+            elif 'ILAN' in title_upper or 'IHALE' in title_upper:
+                category = "İLÂN BÖLÜMÜ"
+            elif 'YARGI' in title_upper:
+                category = "İLÂN BÖLÜMÜ"
+            elif 'MERKEZ BANKASI' in title_upper or 'DOVIZ' in title_upper:
+                category = "TEBLİĞLER"
+
+            categorized.append(GazetteItem(
+                title=item.title,
+                category=category,
+                link=item.link,
+                item_type=item.item_type
+            ))
+
+        return categorized
+
     def scrape(self) -> GazetteData:
         """Ana scraping fonksiyonu"""
 
-        # Önce direkt bağlantı dene (lokal çalışma için)
         print("      Direkt bağlantı deneniyor...")
         content = self.fetch_direct(self.TARGET_URL)
 
-        # Direkt başarısızsa proxy dene
         if not content:
             print("      Proxy servisleri deneniyor...")
             content = self.fetch_via_proxy(self.TARGET_URL)
